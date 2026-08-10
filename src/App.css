@@ -1,0 +1,98 @@
+/* Import Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap');
+
+/* Global Styles */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Poppins', sans-serif;
+  color: #333;
+  background-color: #f8f9fa;
+}
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Loading Screen */
+.loading-screen {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  font-size: 1.5rem;
+  color: #4b6cb7;
+  background-color: #f8f9fa;
+}
+
+/* Custom Button Styles */
+.btn-primary {
+  background: linear-gradient(45deg, #4b6cb7, #182848);
+  border: none;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(75, 108, 183, 0.3);
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 7px 20px rgba(75, 108, 183, 0.4);
+  background: linear-gradient(45deg, #4b6cb7, #182848);
+}
+
+/* Custom Form Styles */
+.form-control:focus {
+  border-color: #4b6cb7;
+  box-shadow: 0 0 0 0.25rem rgba(75, 108, 183, 0.25);
+}
+
+/* Custom Card Styles */
+.card {
+  border: none;
+  border-radius: 15px;
+  box-shadow: 0 5px 20px rgba(0, 0, 0, 0.05);
+  overflow: hidden;
+}
+
+/* Custom Alert Styles */
+.alert-danger {
+  background-color: #fff5f5;
+  color: #e53e3e;
+  border-color: #fed7d7;
+  border-radius: 10px;
+}
+
+/* Custom Progress Bar Styles */
+.progress-bar {
+  background: linear-gradient(45deg, #4b6cb7, #182848);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.5s ease-out forwards;
+}
+
+/* Responsive Adjustments */
+@media (max-width: 767px) {
+  .container {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+}
