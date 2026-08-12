@@ -105,9 +105,9 @@ const Landing = () => {
               <p>© 2025 Text2Clip. All rights reserved.</p>
             </Col>
             <Col md={6} className="footer-links">
-              <a href="#" className="footer-link">Terms of Service</a>
-              <a href="#" className="footer-link">Privacy Policy</a>
-              <a href="#" className="footer-link">Contact Us</a>
+              <a href="/#" className="footer-link">Terms of Service</a>
+              <a href="/#" className="footer-link">Privacy Policy</a>
+              <a href="/#" className="footer-link">Contact Us</a>
             </Col>
           </Row>
         </Container>

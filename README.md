@@ -1,53 +1,60 @@
 # Text2Clip Unified
 
-AI-powered text-to-video clip generator — combined frontend and backend monorepo.
+AI-powered text-to-video clip generator — unified frontend and backend monorepo. The application is served by a single FastAPI backend which also acts as the host for the built React frontend.
 
 ## Structure
 
-```
 text2clip-unified/
-├── backend/     # Python/FastAPI backend — scene generation, TTS, video assembly
+├── backend/     # Python/FastAPI backend — scene generation, TTS, video assembly, serving UI
 ├── frontend/    # React frontend — prompt UI and video preview
-└── .gitignore
-```
+└── README.md
 
-## Backend
+## Setup & Running Locally
 
-- **Tech**: Python, FastAPI
-- **Main entry**: `backend/main.py`
+### 1. Build the Frontend
 
-### Setup
-
-```bash
-cd backend
-pip install -r requirements.txt
-python main.py
-```
-
-### Environment variables
-
-Create `backend/.env` with your API keys (see backend source for required keys).
-
-## Frontend
-
-- **Tech**: React (Create React App)
-
-### Setup
+First, you need to build the React application so the backend can serve its static files.
 
 ```bash
 cd frontend
 npm install
-npm start
+npm run build
+cd ..
 ```
 
-### Environment variables
+### 2. Setup the Backend
 
-Create `frontend/.env`:
+Ensure you have Python installed.
+
+```bash
+cd backend
+python3 -m virtualenv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
 ```
-REACT_APP_API_URL=http://localhost:8000
+
+### 3. Environment variables
+
+Create `backend/.env` with your API keys:
 ```
+TOGETHER_API_KEY=your_together_api_key
+OPENAI_API_KEY=your_openrouter_api_key
+```
+Note: OpenRouter is used for the LLM model to generate scenes.
+
+### 4. Run the Application
+
+Start the FastAPI server (from the `backend` directory):
+```bash
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+The application is now accessible at `http://localhost:8000/`. The FastAPI backend serves the React application directly!
+
+## API Documentation
+
+Since we use FastAPI, interactive API documentation is automatically generated and available at `http://localhost:8000/docs`.
 
 ## Deployment
 
-- **Backend**: Hosted on Render (`text2clip-be.onrender.com`)
-- **Frontend**: Configure `REACT_APP_API_URL` to point to the backend URL.
+You can deploy the single backend application (which serves the frontend) on platforms like Render, Heroku, or AWS. Be sure to configure the start command to `uvicorn main:app --host 0.0.0.0 --port $PORT` and ensure the frontend build process runs before startup.
