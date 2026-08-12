@@ -26,7 +26,7 @@ const Dashboard = ({ user }) => {
     if (taskId) {
       interval = setInterval(async () => {
         try {
-          const response = await axios.get(`${process.env.REACT_APP_API_URL}/progress/${taskId}`);// http://localhost:5000/progress/${taskId}
+          const response = await axios.get(`${'/api'}/progress/${taskId}`);// http://localhost:5000/progress/${taskId}
           setProgress(response.data);
           if (response.data.state === 'SUCCESS' || response.data.state === 'FAILURE') {
             clearInterval(interval);
@@ -55,7 +55,7 @@ const Dashboard = ({ user }) => {
     }
 
     try {
-      const response = await axios.post(`${process.env.REACT_APP_API_URL}/generate_clip`, {
+      const response = await axios.post(`${'/api'}/generate_clip`, {
         topic,
         num_scenes: parseInt(numScenes),
       });
@@ -81,7 +81,7 @@ const Dashboard = ({ user }) => {
 
   const handleDownload = async () => {
     try {
-      const response = await axios.get(`${process.env.REACT_APP_API_URL}/download/${taskId}`, { responseType: 'blob' });
+      const response = await axios.get(`${'/api'}/download/${taskId}`, { responseType: 'blob' });
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;

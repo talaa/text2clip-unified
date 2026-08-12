@@ -1,11 +1,3 @@
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS  # Import CORS
-from flasgger import Swagger, swag_from  # Import Flasgger for Swagger
-from text2speech import text2speech
-from scenecreator import createscenes as create_scenes
-from generateimage import generate_image
-from createvideo import create_video
-import json
 import os
 import shutil
 import uuid
@@ -13,20 +5,23 @@ import threading
 import time
 import logging
 import io
+import json
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
 from dotenv import load_dotenv
 import psutil
 
-app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
-
-# Configure Swagger
-app.config['SWAGGER'] = {
-    'title': 'Video Generation API',
-    'uiversion': 3,
-    'description': 'API for generating videos from text prompts, with scene creation, image generation, and audio synthesis.',
-    'version': '1.0.0'
-}
-swagger = Swagger(app)
+# Need to make sure these exist and are compatible
+from text2speech import text2speech
+from scenecreator import createscenes as create_scenes
+from generateimage import generate_image
+from createvideo import create_video
 
 load_dotenv()
 BASE_TEMP_DIR = "temp"
@@ -75,6 +70,28 @@ def cleanup_old_temp_dirs(max_age_hours=24):
                     deleted += 1
     return deleted
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    cleanup_old_temp_dirs()
+    yield
+    # Shutdown
+    pass
+
+app = FastAPI(title="Video Generation API", version="1.0.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class GenerateRequest(BaseModel):
+    topic: str
+    num_scenes: int
+
 def update_status(task_dir, status, output_file=None):
     status_file = os.path.join(task_dir, "status.json")
     data = {"status": status}
@@ -83,7 +100,7 @@ def update_status(task_dir, status, output_file=None):
     with open(status_file, 'w') as f:
         json.dump(data, f)
 
-def generate_video_async(task_id, topic, num_scenes):
+def generate_video_async(task_id: str, topic: str, num_scenes: int):
     task_dir = os.path.join(BASE_TEMP_DIR, task_id)
     audio_dir = os.path.join(task_dir, "Audio")
     images_dir = os.path.join(task_dir, "images")
@@ -97,8 +114,12 @@ def generate_video_async(task_id, topic, num_scenes):
         scenes = create_scenes(topic, num_scenes)
         logger.debug(f"Memory usage after scene generation: {get_memory_usage()}")
 
-        scenes = scenes.strip("```json\n").strip()
-        scenes_data = json.loads(scenes)
+        try:
+            scenes_data = json.loads(scenes)
+        except json.JSONDecodeError as e:
+            update_status(task_dir, f"Error: JSON parsing failed - {str(e)}")
+            return
+
         scenes_array = scenes_data.get("scenes", [])
         if not scenes_array:
             update_status(task_dir, "Error: No scenes generated")
@@ -139,115 +160,31 @@ def get_memory_usage():
         "percent": psutil.virtual_memory().percent  # System-wide memory usage percentage
     }
 
-@app.route('/generate_clip', methods=['POST'])
-@swag_from({
-    'tags': ['Video Generation'],
-    'summary': 'Start video generation task',
-    'description': 'Initiates an asynchronous video generation task based on a topic and number of scenes.',
-    'parameters': [
-        {
-            'name': 'body',
-            'in': 'body',
-            'required': True,
-            'schema': {
-                'type': 'object',
-                'properties': {
-                    'topic': {'type': 'string', 'example': 'A journey through space'},
-                    'num_scenes': {'type': 'integer', 'example': 3}
-                },
-                'required': ['topic', 'num_scenes']
-            }
-        }
-    ],
-    'responses': {
-        202: {
-            'description': 'Task accepted',
-            'schema': {
-                'type': 'object',
-                'properties': {
-                    'task_id': {'type': 'string', 'example': '123e4567-e89b-12d3-a456-426614174000'}
-                }
-            }
-        },
-        400: {
-            'description': 'Invalid input',
-            'schema': {
-                'type': 'object',
-                'properties': {
-                    'error': {'type': 'string', 'example': 'Missing topic or num_scenes'}
-                }
-            }
-        }
-    }
-})
-def start_generate_video():
-    data = request.get_json()
-    if not data or "topic" not in data or "num_scenes" not in data:
-        return jsonify({"error": "Missing topic or num_scenes"}), 400
-    
-    topic = data["topic"]
-    num_scenes = data["num_scenes"]
-    
-    if not isinstance(num_scenes, int) or num_scenes <= 0:
-        return jsonify({"error": "num_scenes must be a positive integer"}), 400
-    if num_scenes > 6:
-        return jsonify({"error": "num_scenes cannot exceed 6"}), 400
+# API Routes
+@app.post("/api/generate_clip", status_code=202)
+def start_generate_video(req: GenerateRequest, background_tasks: BackgroundTasks):
+    if not req.topic or req.num_scenes <= 0:
+        raise HTTPException(status_code=400, detail="Invalid topic or num_scenes")
+    if req.num_scenes > 6:
+        raise HTTPException(status_code=400, detail="num_scenes cannot exceed 6")
 
     task_id = str(uuid.uuid4())
     os.makedirs(os.path.join(BASE_TEMP_DIR, task_id), exist_ok=True)
     update_status(os.path.join(BASE_TEMP_DIR, task_id), "Queued")
-    threading.Thread(target=generate_video_async, args=(task_id, topic, num_scenes)).start()
-    return jsonify({"task_id": task_id}), 202
+    background_tasks.add_task(generate_video_async, task_id, req.topic, req.num_scenes)
+    return {"task_id": task_id}
 
-@app.route('/progress/<task_id>', methods=['GET'])
-@swag_from({
-    'tags': ['Video Generation'],
-    'summary': 'Check task progress',
-    'description': 'Retrieves the progress status of a video generation task.',
-    'parameters': [
-        {
-            'name': 'task_id',
-            'in': 'path',
-            'type': 'string',
-            'required': True,
-            'description': 'The ID of the task',
-            'example': '123e4567-e89b-12d3-a456-426614174000'
-        }
-    ],
-    'responses': {
-        200: {
-            'description': 'Task status',
-            'schema': {
-                'type': 'object',
-                'properties': {
-                    'state': {'type': 'string', 'enum': ['PENDING', 'PROGRESS', 'SUCCESS', 'FAILURE'], 'example': 'PROGRESS'},
-                    'status': {'type': 'string', 'example': 'Generating scenes'},
-                    'download_url': {'type': 'string', 'example': '/download/123e4567-e89b-12d3-a456-426614174000'}
-                }
-            }
-        },
-        404: {
-            'description': 'Task not found',
-            'schema': {
-                'type': 'object',
-                'properties': {
-                    'state': {'type': 'string', 'example': 'PENDING'},
-                    'status': {'type': 'string', 'example': 'Task not found or queued'}
-                }
-            }
-        }
-    }
-})
-def get_progress(task_id):
+@app.get("/api/progress/{task_id}")
+def get_progress(task_id: str):
     task_dir = os.path.join(BASE_TEMP_DIR, task_id)
     status_file = os.path.join(task_dir, "status.json")
     if not os.path.exists(status_file):
-        return jsonify({"state": "PENDING", "status": "Task not found or queued"}), 404
+        return JSONResponse(status_code=404, content={"state": "PENDING", "status": "Task not found or queued"})
     
     with open(status_file, 'r') as f:
         status_data = json.load(f)
     
-    state = "PROGRESS" if status_data["status"].startswith("Error") or status_data["status"] == "Done" else "PROGRESS"
+    state = "PROGRESS"
     if status_data["status"].startswith("Error"):
         state = "FAILURE"
     elif status_data["status"] == "Done":
@@ -255,229 +192,81 @@ def get_progress(task_id):
     
     response = {"state": state, "status": status_data["status"]}
     if state == "SUCCESS":
-        response["download_url"] = f"/download/{task_id}"
-    return jsonify(response)
+        response["download_url"] = f"/api/download/{task_id}"
+    return response
 
-@app.route('/download/<task_id>', methods=['GET'])
-@swag_from({
-    'tags': ['Video Generation'],
-    'summary': 'Download generated video',
-    'description': 'Downloads the generated video file for a completed task.',
-    'parameters': [
-        {
-            'name': 'task_id',
-            'in': 'path',
-            'type': 'string',
-            'required': True,
-            'description': 'The ID of the task',
-            'example': '123e4567-e89b-12d3-a456-426614174000'
-        }
-    ],
-    'responses': {
-        200: {
-            'description': 'Video file',
-            'content': {
-                'video/mp4': {
-                    'schema': {
-                        'type': 'string',
-                        'format': 'binary'
-                    }
-                }
-            }
-        },
-        400: {
-            'description': 'Task not completed or failed',
-            'schema': {
-                'type': 'object',
-                'properties': {
-                    'error': {'type': 'string', 'example': 'Task not completed or failed'}
-                }
-            }
-        },
-        404: {
-            'description': 'Task not found',
-            'schema': {
-                'type': 'object',
-                'properties': {
-                    'error': {'type': 'string', 'example': 'Task not found'}
-                }
-            }
-        },
-        500: {
-            'description': 'Video file not found',
-            'schema': {
-                'type': 'object',
-                'properties': {
-                    'error': {'type': 'string', 'example': 'Video file not found'}
-                }
-            }
-        }
-    }
-})
-def download_video(task_id):
+@app.get("/api/download/{task_id}")
+def download_video(task_id: str):
     task_dir = os.path.join(BASE_TEMP_DIR, task_id)
     status_file = os.path.join(task_dir, "status.json")
     if not os.path.exists(status_file):
-        return jsonify({"error": "Task not found"}), 404
+        raise HTTPException(status_code=404, detail="Task not found")
     
     with open(status_file, 'r') as f:
         status_data = json.load(f)
     
     if status_data["status"] != "Done":
-        return jsonify({"error": "Task not completed or failed"}), 400
+        raise HTTPException(status_code=400, detail="Task not completed or failed")
     
     output_file = status_data["output_file"]
     if not os.path.exists(output_file):
-        return jsonify({"error": "Video file not found"}), 500
+        raise HTTPException(status_code=500, detail="Video file not found")
 
-    with open(output_file, 'rb') as f:
-        video_data = io.BytesIO(f.read())
-    response = send_file(
-        video_data,
-        mimetype='video/mp4',
-        as_attachment=True,
-        download_name="output_movie.mp4"
+    return FileResponse(
+        path=output_file,
+        media_type="video/mp4",
+        filename="output_movie.mp4"
     )
-    
-    if not safe_rmtree(task_dir):
-        logger.info(f"Deferred cleanup for {task_dir}")
-    return response
 
-@app.route('/cleanup', methods=['POST'])
-@swag_from({
-    'tags': ['Maintenance'],
-    'summary': 'Clean up old temporary directories',
-    'description': 'Manually triggers cleanup of temporary directories older than 24 hours.',
-    'responses': {
-        200: {
-            'description': 'Cleanup successful',
-            'schema': {
-                'type': 'object',
-                'properties': {
-                    'message': {'type': 'string', 'example': 'Cleaned up 5 old temporary directories'}
-                }
-            }
-        }
-    }
-})
+@app.post("/api/cleanup")
 def manual_cleanup():
     deleted = cleanup_old_temp_dirs()
-    return jsonify({"message": f"Cleaned up {deleted} old temporary directories"}), 200
+    return {"message": f"Cleaned up {deleted} old temporary directories"}
 
-@app.route('/health', methods=['GET'])
-@swag_from({
-    'tags': ['Maintenance'],
-    'summary': 'Health check',
-    'description': 'Checks if the API is running and healthy.',
-    'responses': {
-        200: {
-            'description': 'API is healthy',
-            'schema': {
-                'type': 'object',
-                'properties': {
-                    'status': {'type': 'string', 'example': 'healthy'}
-                }
-            }
-        }
-    }
-})
+@app.get("/api/health")
 def health_check():
-    return jsonify({"status": "healthy"}), 200
+    return {"status": "healthy"}
 
-@app.route('/memory', methods=['GET'])
-@swag_from({
-    'tags': ['Maintenance'],
-    'summary': 'Get memory usage',
-    'description': 'Returns the current memory usage of the API process and system.',
-    'responses': {
-        200: {
-            'description': 'Memory usage details',
-            'schema': {
-                'type': 'object',
-                'properties': {
-                    'rss_mb': {'type': 'number', 'example': 50.5},
-                    'vms_mb': {'type': 'number', 'example': 100.2},
-                    'system_memory_percent': {'type': 'number', 'example': 75.3}
-                }
-            }
-        }
-    }
-})
+@app.get("/api/memory")
 def memory_usage():
     memory = get_memory_usage()
-    return jsonify({
+    return {
         "rss_mb": memory["rss"],
         "vms_mb": memory["vms"],
         "system_memory_percent": memory["percent"]
-    }), 200
-
-@app.route('/delete_temp/<directory_name>', methods=['DELETE'])
-@swag_from({
-    'tags': ['Maintenance'],
-    'summary': 'Delete a temporary directory',
-    'description': 'Deletes a specified directory in the temp folder.',
-    'parameters': [
-        {
-            'name': 'directory_name',
-            'in': 'path',
-            'type': 'string',
-            'required': True,
-            'description': 'The name of the directory to delete',
-            'example': '123e4567-e89b-12d3-a456-426614174000'
-        }
-    ],
-    'responses': {
-        200: {
-            'description': 'Directory deleted successfully',
-            'schema': {
-                'type': 'object',
-                'properties': {
-                    'message': {'type': 'string', 'example': 'Successfully deleted 123e4567-e89b-12d3-a456-426614174000'}
-                }
-            }
-        },
-        404: {
-            'description': 'Directory not found',
-            'schema': {
-                'type': 'object',
-                'properties': {
-                    'error': {'type': 'string', 'example': 'Directory not found'}
-                }
-            }
-        },
-        400: {
-            'description': 'Not a directory',
-            'schema': {
-                'type': 'object',
-                'properties': {
-                    'error': {'type': 'string', 'example': 'Specified path is not a directory'}
-                }
-            }
-        },
-        500: {
-            'description': 'Failed to delete directory',
-            'schema': {
-                'type': 'object',
-                'properties': {
-                    'error': {'type': 'string', 'example': 'Failed to delete 123e4567-e89b-12d3-a456-426614174000'}
-                }
-            }
-        }
     }
-})
-def delete_temp_directory(directory_name):
+
+@app.delete("/api/delete_temp/{directory_name}")
+def delete_temp_directory(directory_name: str):
     task_dir = os.path.join(BASE_TEMP_DIR, directory_name)
     if not os.path.exists(task_dir):
-        return jsonify({"error": "Directory not found"}), 404
-
+        raise HTTPException(status_code=404, detail="Directory not found")
     if not os.path.isdir(task_dir):
-        return jsonify({"error": "Specified path is not a directory"}), 400
+        raise HTTPException(status_code=400, detail="Specified path is not a directory")
 
     if safe_rmtree(task_dir):
-        return jsonify({"message": f"Successfully deleted {directory_name}"}), 200
+        return {"message": f"Successfully deleted {directory_name}"}
     else:
-        return jsonify({"error": f"Failed to delete {directory_name}"}), 500
+        raise HTTPException(status_code=500, detail=f"Failed to delete {directory_name}")
 
-if __name__ == '__main__':
-    cleanup_old_temp_dirs()
-    app.run(host='0.0.0.0', port=5000, debug=True)
+
+# Serve React app
+frontend_dist = os.path.join(os.path.dirname(__file__), "..", "frontend", "build")
+if os.path.exists(frontend_dist):
+    app.mount("/static", StaticFiles(directory=os.path.join(frontend_dist, "static")), name="static")
+
+    @app.get("/{full_path:path}")
+    def serve_frontend(full_path: str):
+        # Serve specific files if they exist
+        file_path = os.path.join(frontend_dist, full_path)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+        # Fallback to index.html for React Router
+        index_path = os.path.join(frontend_dist, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+        return JSONResponse(status_code=404, content={"detail": "Frontend not built or found"})
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
